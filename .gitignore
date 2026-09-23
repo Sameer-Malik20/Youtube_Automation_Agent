@@ -15,6 +15,11 @@ node_modules/
 data/youtube_automation.db
 data/telegram_staging/
 data/*.db
+data/assets/
+data/audio/
+data/captions/
+data/scripts/
+data/telegram_admin.json
 
 # Media & Temporary render files
 samples/
