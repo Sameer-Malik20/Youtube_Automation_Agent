@@ -1,0 +1,31 @@
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# YouTube OAuth & API credentials
+config/tokens.json
+config/credentials.json
+data/telegram_admin.json
+
+# Dependencies
+node_modules/
+
+# Local database & staging data
+data/youtube_automation.db
+data/telegram_staging/
+data/*.db
+
+# Media & Temporary render files
+samples/
+temp/
+uploads/
+logs/
+*.mp4
+*.jpg
+*.png
+*.log
+
+# System files
+.DS_Store
+*.pid
