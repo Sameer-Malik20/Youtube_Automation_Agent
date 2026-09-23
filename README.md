@@ -62,17 +62,31 @@ The Telegram Bot is built on an **asynchronous non-blocking parallel event loop*
 ┌─────────────────────────────────┬─────────────────────────────────┐
 │       💡 Give Me Prompt         │       📤 Manual Upload          │
 ├─────────────────────────────────┼─────────────────────────────────┤
-│   ✅ Completed - Merge & Upload │       📊 System Status          │
+│       💬 Ask AI Copilot         │       📊 System Status          │
 ├─────────────────────────────────┼─────────────────────────────────┤
-│     🎯 Strategy & Backlog       │     📈 Growth & Analytics       │
+│   ✅ Completed - Merge & Upload │     🎯 Strategy & Backlog       │
 ├─────────────────────────────────┼─────────────────────────────────┤
-│     🤖 Operator Analysis        │     🩺 7 Agents Health          │
+│     📈 Growth & Analytics       │     🩺 7 Agents Health          │
 ├─────────────────────────────────┼─────────────────────────────────┤
-│   🤖 Fallback AI Video Now      │       📋 Live Logs              │
-├─────────────────────────────────┴─────────────────────────────────┤
-│                    🗑 Clear Current Draft                         │
-└───────────────────────────────────────────────────────────────────┘
+│     🤖 Operator Analysis        │       📋 Live Logs              │
+├─────────────────────────────────┼─────────────────────────────────┤
+│   🤖 Fallback AI Video Now      │     🗑 Clear Current Draft      │
+└─────────────────────────────────┴─────────────────────────────────┘
 ```
+
+---
+
+### 💬 0. AI Channel Strategist & Copilot (Local Proxy Powered)
+Directly chat with an AI Growth Mentor inside Telegram:
+- **Button:** `[ 💬 Ask AI Copilot ]` or command `/chat`
+- **Natural Language Interaction:** Ask questions like:
+  - *"Meri last video par views kyu kam aaye?"*
+  - *"Is video ka SEO audit karo aur tags batao."*
+  - *"Agla viral Short kis topic par banana chahiye?"*
+  - *"Audience retention aur initial 3-second hook kaise improve karein?"*
+- **Real-Time YouTube Context:** Injects live channel statistics, subscriber counts, and the latest 5 published videos (views, likes, tags, descriptions) into the prompt.
+- **Strictly Local Proxy (`:8081`):** Uses the local Gemini-Web2API proxy (`http://127.0.0.1:8081/v1`, model `gemini-3.6-flash`) without consuming official quota.
+- **Conversational Memory:** Preserves multi-turn context so you can ask follow-up questions.
 
 ---
 

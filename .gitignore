@@ -20,6 +20,7 @@ data/audio/
 data/captions/
 data/scripts/
 data/telegram_admin.json
+data/topic_history.json
 
 # Media & Temporary render files
 samples/
