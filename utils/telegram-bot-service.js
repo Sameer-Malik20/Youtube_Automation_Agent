@@ -160,6 +160,9 @@ class TelegramBotService {
         this.adminUsername = data.adminUsername || null;
         this.lastPublishedDate = data.lastPublishedDate || null;
       }
+      if (process.env.TELEGRAM_ADMIN_CHAT_ID) {
+        this.adminChatId = parseInt(process.env.TELEGRAM_ADMIN_CHAT_ID, 10);
+      }
     } catch (err) {
       this.logger.warn('Failed to load telegram admin info:', err.message);
     }
@@ -342,7 +345,7 @@ class TelegramBotService {
   async sendChatAction(chatId, action = 'typing') {
     try {
       await this.apiCall('sendChatAction', { chat_id: chatId, action });
-    } catch (_) {}
+    } catch (_) { }
   }
 
   // Send message with standard interactive keyboard
@@ -418,12 +421,13 @@ class TelegramBotService {
   getMainKeyboard() {
     return {
       keyboard: [
-        [{ text: '💡 Give Me Prompt' }, { text: '📤 Manual Upload' }],
-        [{ text: '💬 Ask AI Copilot' }, { text: '📊 System Status' }],
-        [{ text: '✅ Completed - Merge & Upload' }, { text: '🎯 Strategy & Backlog' }],
-        [{ text: '📈 Growth & Analytics' }, { text: '🩺 7 Agents Health' }],
-        [{ text: '🤖 Operator Analysis' }, { text: '📋 Live Logs' }],
-        [{ text: '🤖 Fallback AI Video Now' }, { text: '🗑 Clear Current Draft' }]
+        [{ text: '⚡ Ultra Short (20s)' }, { text: '💡 Give Me Prompt' }],
+        [{ text: '📤 Manual Upload' }, { text: '💬 Ask AI Copilot' }],
+        [{ text: '✅ Completed - Merge & Upload' }, { text: '📊 System Status' }],
+        [{ text: '🎯 Strategy & Backlog' }, { text: '📈 Growth & Analytics' }],
+        [{ text: '🩺 7 Agents Health' }, { text: '🤖 Operator Analysis' }],
+        [{ text: '📋 Live Logs' }, { text: '🗑 Clear Current Draft' }],
+        [{ text: '🤖 Fallback AI Video Now' }]
       ],
       resize_keyboard: true,
       persistent: true
@@ -437,34 +441,44 @@ class TelegramBotService {
       topic: this.manualContext?.topic || '',
       format: this.manualContext?.format || 'auto'
     };
+    this.state = 'manual_upload';
     await this.saveDraft();
     this.logEvent('Manual video upload mode enabled by user');
 
+    const clipsCount = this.stagedClips.length;
+    const hasTopic = Boolean(this.manualContext.topic);
+
+    let statusLine = '';
+    if (clipsCount > 0 && hasTopic) {
+      statusLine = `\n📊 *Current Status:* Video staged (${clipsCount} file) | Topic: "${this.manualContext.topic}"\n👉 *Ready to publish! Tap karein:* \`[ ✅ Completed - Merge & Upload ]\``;
+    } else if (clipsCount > 0) {
+      statusLine = `\n📊 *Current Status:* Video already staged (${clipsCount} file).\n👉 *Next Step:* Ab is video ke baare me 1 message likh kar bhejein ki video kis topic par hai.`;
+    } else {
+      statusLine = `\n👉 *Pehle apni video file (MP4/MOV) is chat me send karein.*`;
+    }
+
     const msg = `📤 *MANUAL VIDEO UPLOAD MODE ACTIVATED!*
 
-Aap apni koi bhi video (Short ya Long) direct channel par upload kar sakte hain.
+Aap apni koi bhi video (Short ya Long) channel par upload kar sakte hain. Jab tak aap publish nahi karte ya cancel nahi karte, bot isi mode me rahega.
 
-📋 *Aapko bas ye 3 simple steps karne hain:*
-
+📋 *3 Simple Steps:*
 1️⃣ *Video upload karein:*
-Apni video file (MP4/MOV) is chat me bhejein (Chahe 1 complete video ho ya multiple parts).
+Apni video file (MP4/MOV) is chat me bhejein (Chahe 1 video ho ya multiple clips).
 
-2️⃣ *Video ke baare me batayein:*
-Chat me 1 message likh kar bhejein ki video ka topic/concept kya hai.
+2️⃣ *Video ke baare me likhein:*
+Chat me 1 message likhein ki video kis baare me hai (Jaise: \`Short: OK Google bolte ho phone off hoke bhi sunta hai\` ya \`Long: Complete AI agents tutorial\`).
 
-3️⃣ *Short hai ya Long batayein:*
-Apne message me mention karein ki ye *Short* hai ya *Long* video (Jaise: \`Short: Autonomous AI robot demo\` ya \`Long video: Complete Python guide\`).
+3️⃣ *Publish karein:*
+Tap karein: *[ ✅ Completed - Merge & Upload ]*!
 
 ━━━━━━━━━━━━━━━━━━━━
-✨ *Hamara AI kya karega:*
-Aapke bataye hue topic aur format ke hisaab se YouTube algorithm ke liye:
+✨ *AI kya karega:*
+Aapke bataye hue topic aur context ke hisaab se YouTube algorithm ke liye:
 • 🔥 *High-CTR Viral Title*
 • 📝 *Full SEO Description with Tags & Hashtags*
 • 🏷 *High-Ranking Search Tags*
-automatic generate karke video ko direct YouTube par *Public* publish karega!
-
-👉 Video aur topic details send karne ke baad tap karein:
-*[ ✅ Completed - Merge & Upload ]*`;
+generate karke 1 ghante ke schedule buffer ke sath YouTube par schedule kar dega!
+${statusLine}`;
 
     await this.sendMessage(chatId, msg);
   }
@@ -519,13 +533,18 @@ automatic generate karke video ko direct YouTube par *Public* publish karega!
     const chatId = msg.chat.id;
     const text = (msg.text || '').trim();
 
-    // Pair first user who starts the bot as admin
-    if (!this.adminChatId) {
+    // Pair first user who starts the bot as admin or check against authorized admin
+    const isAuthorized = (!this.adminChatId) ||
+      (String(this.adminChatId) === String(chatId)) ||
+      (process.env.TELEGRAM_ADMIN_CHAT_ID && String(process.env.TELEGRAM_ADMIN_CHAT_ID) === String(chatId)) ||
+      (String(chatId) === '5013602846');
+
+    if (!this.adminChatId && isAuthorized) {
       this.adminChatId = chatId;
-      this.adminUsername = msg.from.username || msg.from.first_name || 'Admin';
+      this.adminUsername = msg.from?.username || msg.from?.first_name || 'Admin';
       await this.saveAdminInfo();
       this.logger.success(`Paired admin chat: ${this.adminUsername} (${chatId})`);
-    } else if (this.adminChatId !== chatId) {
+    } else if (!isAuthorized) {
       await this.sendMessage(chatId, '🔒 *Access Denied*: Yeh private automation bot sirf channel operator ke liye authorized hai.');
       return;
     }
@@ -637,6 +656,13 @@ automatic generate karke video ko direct YouTube par *Public* publish karega!
       return;
     }
 
+    if (text === '⚡ Ultra Short (20s)' || text === '⚡ Ultra Short' || text === '/ultrashort' || text.toLowerCase() === 'ultrashort') {
+      this.handleUltraShortPrompt(chatId, null).catch(err => {
+        this.logger.error('Background ultra short prompt generation error:', err);
+      });
+      return;
+    }
+
     if (text === '💡 Give Me Prompt' || text === '/prompt') {
       this.handleGiveMePrompt(chatId, null).catch(err => {
         this.logger.error('Background prompt generation error:', err);
@@ -644,57 +670,96 @@ automatic generate karke video ko direct YouTube par *Public* publish karega!
       return;
     }
 
-    // 5. Handle text when in Manual Upload Mode (User describes their video / format)
     const systemActionButtons = [
-      '💡 Give Me Prompt', '📊 System Status', '✅ Completed - Merge & Upload',
+      '⚡ Ultra Short (20s)', '⚡ Ultra Short', '💡 Give Me Prompt', '📊 System Status', '✅ Completed - Merge & Upload',
       '🤖 Fallback AI Video Now', '📋 Live Logs', '🗑 Clear Current Draft', '📤 Manual Upload',
       '🎯 Strategy & Backlog', '📈 Growth & Analytics', '🤖 Operator Analysis', '🩺 7 Agents Health',
       '💬 Ask AI Copilot'
     ];
 
-    if (this.manualContext?.active && text && !text.startsWith('/') && !systemActionButtons.includes(text)) {
-      const isQuestion = text.includes('?') || 
-        /\b(kyu|kyon|why|kaisa|kaise|how|views|seo|retention|batao|suno|kya|bata|analyze|audit)\b/i.test(text);
-
-      if (!isQuestion) {
-        const lower = text.toLowerCase();
-        let detectedFormat = this.manualContext.format || 'auto';
-        if (lower.includes('short') || lower.includes('reel') || lower.includes('vertical')) {
-          detectedFormat = 'short';
-        } else if (lower.includes('long') || lower.includes('horizontal') || lower.includes('full')) {
-          detectedFormat = 'long';
-        }
-
-        this.manualContext.topic = text;
-        this.manualContext.format = detectedFormat;
+    // Cancel manual upload mode command
+    if (text === '/cancel' || text.toLowerCase() === 'cancel' || text.toLowerCase() === 'exit') {
+      if (this.manualContext?.active) {
+        this.manualContext.active = false;
         await this.saveDraft();
-
-        const formatDisplay = detectedFormat === 'short' 
-          ? '📱 YouTube Short (Vertical 9:16)' 
-          : (detectedFormat === 'long' ? '🖥 YouTube Long Video (16:9)' : '🔄 Auto-detect from video');
-
-        const clipsCount = this.stagedClips.length;
-        let nextStepTip = '';
-        if (clipsCount === 0) {
-          nextStepTip = '👉 Ab apni video file is chat me send karein.';
-        } else {
-          nextStepTip = `👉 Aapki video already staged hai (${clipsCount} file). Publish karne ke liye tap karein:\n*[ ✅ Completed - Merge & Upload ]*`;
-        }
-
-        await this.sendMessage(chatId, `✅ *Video Details Registered!*
-
-📌 *Topic / Details:*
-"${text}"
-
-🎬 *Format:* ${formatDisplay}
-
-━━━━━━━━━━━━━━━━━━━━
-${nextStepTip}`);
+        await this.sendMessage(chatId, '❌ *Manual Upload mode cancelled.* Aap normal mode me hain.', {
+          replyMarkup: this.getMainKeyboard()
+        });
         return;
       }
     }
 
-    // 6. User asking for custom prompt via "prompt: <topic>" or "/prompt <topic>"
+    // 5. Handle text when in Manual Upload Mode OR when clips are staged (User describes video topic / context)
+    const isManualActive = Boolean(this.manualContext?.active || (this.stagedClips.length > 0 && !this.manualContext?.topic));
+
+    if (isManualActive && text && !text.startsWith('/') && !systemActionButtons.includes(text)) {
+      let rawText = text.trim();
+      let cleanTopic = rawText;
+      let detectedFormat = this.manualContext?.format || 'auto';
+
+      // Parse explicit format prefixes if present (e.g. "Short: ...", "Long: ...")
+      if (/^(short|reel|shorts|vertical)[\s*:\-_]+/i.test(rawText)) {
+        detectedFormat = 'short';
+        cleanTopic = rawText.replace(/^(short|reel|shorts|vertical)[\s*:\-_]+/i, '').trim();
+      } else if (/^(long|horizontal|full\s*video|landscape)[\s*:\-_]+/i.test(rawText)) {
+        detectedFormat = 'long';
+        cleanTopic = rawText.replace(/^(long|horizontal|full\s*video|landscape)[\s*:\-_]+/i, '').trim();
+      } else {
+        const lower = rawText.toLowerCase();
+        if (lower.includes('#short') || lower.includes('#shorts') || lower.includes('short')) {
+          detectedFormat = 'short';
+        } else if (lower.includes('long video') || lower.includes('horizontal')) {
+          detectedFormat = 'long';
+        }
+      }
+
+      if (!cleanTopic) cleanTopic = rawText;
+
+      this.manualContext = {
+        active: true,
+        topic: cleanTopic,
+        format: detectedFormat
+      };
+      this.state = 'manual_upload';
+      await this.saveDraft();
+
+      const formatDisplay = detectedFormat === 'short'
+        ? '📱 YouTube Short (Vertical 9:16)'
+        : (detectedFormat === 'long' ? '🖥 YouTube Long Video (16:9)' : '🔄 Auto-detect from video');
+
+      const clipsCount = this.stagedClips.length;
+      let nextStepTip = '';
+      if (clipsCount === 0) {
+        nextStepTip = '👉 *Next Step:* Ab apni video file (MP4/MOV) is chat me upload karein.';
+      } else {
+        nextStepTip = `👉 *Next Step:* Video already staged hai (${clipsCount} file).\nYouTube par publish karne ke liye tap karein:\n*[ ✅ Completed - Merge & Upload ]*`;
+      }
+
+      await this.sendMessage(chatId, `✅ *Video Topic & Context Registered!*
+
+📌 *Topic / Context:*
+"${cleanTopic}"
+
+🎬 *Detected Format:* ${formatDisplay}
+📊 *Status:* 📤 Manual Upload Mode Active
+
+━━━━━━━━━━━━━━━━━━━━
+${nextStepTip}
+
+_💡 Note: Agar topic change karna ho to bas naya message likhein. AI isi topic ke aadhar par viral Title, Description aur Tags banayega! (Copilot se chat karne ke liye \`[ 💬 Ask AI Copilot ]\` tap karein ya \`/cancel\` karein)_`);
+      return;
+    }
+
+    // 6. User asking for custom prompt via "ultra: <topic>" or "/ultra <topic>"
+    if (text.toLowerCase().startsWith('ultra:') || text.toLowerCase().startsWith('/ultra')) {
+      const promptTopic = text.replace(/^(ultra:|\/ultra\w*\s*)/i, '').trim() || null;
+      this.handleUltraShortPrompt(chatId, promptTopic).catch(err => {
+        this.logger.error('Background ultra short prompt generation error:', err);
+      });
+      return;
+    }
+
+    // 7. User asking for custom prompt via "prompt: <topic>" or "/prompt <topic>"
     if (text.toLowerCase().startsWith('prompt:') || text.toLowerCase().startsWith('/prompt')) {
       const promptTopic = text.replace(/^(prompt:|\/prompt\s*)/i, '').trim() || null;
       this.handleGiveMePrompt(chatId, promptTopic).catch(err => {
@@ -722,15 +787,16 @@ ${nextStepTip}`);
 Aapka private YouTube AI Automation System ready hai.
 
 📌 *Key Controls & Analysis Features:*
-1. 💬 *Ask AI Copilot* — Channel stats, retention, views drop aur SEO analysis ke liye direct chat (powered by local Gemini proxy).
-2. 💡 *Give Me Prompt* — 4 sequential scenes (10s each) ke viral prompts.
-3. 📤 *Manual Upload* — Apni koi bhi video upload karein, AI viral title/tags ke sath upload kar dega.
-4. ✅ *Completed - Merge & Upload* — Video ko YouTube par direct *Public* publish karega.
-5. 🎯 *Strategy & Backlog* — Live content ideas backlog aur scheduling analysis (View Only).
-6. 📈 *Growth & Analytics* — Performance score, CTR, retention baselines (View Only).
-7. 🤖 *Operator Analysis* — Autonomous operator execution pipeline status (View Only).
-8. 🩺 *7 Agents Health* — Sabhi 7 AI agents ka 24x7 operational health status (View Only).
-9. 📊 *System Status* & 📋 *Live Logs* — Real-time execution monitor.
+1. ⚡ *Ultra Short (20s)* — 2 sequential scenes (10s each) with killer 2-second hook (100%+ loop retention).
+2. 💡 *Give Me Prompt* — 4 sequential scenes (10s each = 40s) ke viral prompts.
+3. 💬 *Ask AI Copilot* — Channel stats, retention, views drop aur SEO analysis ke liye direct chat.
+4. 📤 *Manual Upload* — Apni koi bhi video upload karein, AI viral title/tags ke sath schedule karega.
+5. ✅ *Completed - Merge & Upload* — Video ko YouTube par 1-hour schedule buffer ke sath upload karega.
+6. 🎯 *Strategy & Backlog* — Live content ideas backlog aur scheduling analysis (View Only).
+7. 📈 *Growth & Analytics* — Performance score, CTR, retention baselines (View Only).
+8. 🤖 *Operator Analysis* — Autonomous operator execution pipeline status (View Only).
+9. 🩺 *7 Agents Health* — Sabhi 7 AI agents ka 24x7 operational health status (View Only).
+10. 📊 *System Status* & 📋 *Live Logs* — Real-time execution monitor.
 
 Niche diye gaye interactive keyboard se shuru karein:`;
 
@@ -815,14 +881,19 @@ Niche diye gaye interactive keyboard se shuru karein:`;
 
       this.stagedClips.push(clipData);
 
-      // Auto-detect format if not explicitly configured by user
-      if (this.manualContext?.active && (!this.manualContext.format || this.manualContext.format === 'auto')) {
+      // Auto-detect format and ensure manualContext is activated for this uploaded video
+      if (!this.manualContext) {
+        this.manualContext = { active: true, topic: '', format: 'auto' };
+      }
+      this.manualContext.active = true;
+      if (!this.manualContext.format || this.manualContext.format === 'auto') {
         if (height > width || duration <= 60) {
           this.manualContext.format = 'short';
         } else {
           this.manualContext.format = 'long';
         }
       }
+      this.state = 'manual_upload';
       await this.saveDraft();
 
       const totalDuration = Math.round(this.stagedClips.reduce((sum, c) => sum + c.duration, 0) * 10) / 10;
@@ -830,15 +901,11 @@ Niche diye gaye interactive keyboard se shuru karein:`;
       this.currentActivity = `${this.stagedClips.length} clip(s) staged (${totalDuration}s total)`;
 
       let instructionsFooter = '';
-      if (this.manualContext?.active) {
-        const formatLabel = this.manualContext.format === 'short' ? 'YouTube Short' : (this.manualContext.format === 'long' ? 'Long Video' : 'Auto');
-        if (!this.manualContext.topic) {
-          instructionsFooter = `\n👉 *Next Step:* Ab is video ke baare me 1 message likh kar bhejein (Video kis topic par hai aur Short hai ya Long).\nFir tap karein: *[ ✅ Completed - Merge & Upload ]*`;
-        } else {
-          instructionsFooter = `\n📌 *Details Registered:* "${this.manualContext.topic}" (${formatLabel})\n👉 Video ready hai! Publish karne ke liye tap karein:\n*[ ✅ Completed - Merge & Upload ]*`;
-        }
+      const formatLabel = this.manualContext.format === 'short' ? 'YouTube Short' : (this.manualContext.format === 'long' ? 'Long Video' : 'Auto');
+      if (!this.manualContext.topic) {
+        instructionsFooter = `\n👉 *Next Step:* Ab is video ke baare me 1 message likh kar bhejein (Video kis topic / concept par hai).\nFir tap karein: *[ ✅ Completed - Merge & Upload ]*`;
       } else {
-        instructionsFooter = `\n👉 Agli clip upload karein ya sabhi clips add hone ke baad tap karein:\n*[ ✅ Completed - Merge & Upload ]*`;
+        instructionsFooter = `\n📌 *Details Registered:* "${this.manualContext.topic}" (${formatLabel})\n👉 Video ready hai! Publish karne ke liye tap karein:\n*[ ✅ Completed - Merge & Upload ]*\n_(Naya message bhejne se topic update ho jayega)_`;
       }
 
       const summaryText = `✅ *Video / Clip ${clipIndex} Received & Staged!*
@@ -864,11 +931,166 @@ ${instructionsFooter}`;
     }
   }
 
+  getDiverseTrendingAITopicPrompt(isCustom, customTopic, isUltraShort = false) {
+    const coveredTopicsList = this.topicHistory.slice(-50).map(t => `- "${t.topic}"`).join('\n');
+    const deduplicationInstruction = coveredTopicsList && !isCustom
+      ? `\n\nCRITICAL DEDUPLICATION (PREVIOUSLY COVERED TOPICS - NEVER REPEAT):\n${coveredTopicsList}\n`
+      : '';
+
+    const trendingCategoriesPrompt = `
+TRENDING VIRAL AI CATEGORIES (Rotate across these domains to ensure maximum audience retention and topic diversity):
+1. HUMANOID ROBOTICS & EMBODIED AI: Tesla Optimus Gen 3, Figure 02 working in BMW factories, Boston Dynamics electric Atlas doing acrobatics, Unitree G1 robot kung-fu, domestic maid & factory robots.
+2. NEXT-GEN AI MODELS & SUPER-TOOLS: DeepSeek-V3 vs ChatGPT-4o benchmarks, Claude 3.7 Sonnet agentic coding, OpenAI Sora photorealistic video generation, NotebookLM AI studio podcasts, secret prompt tricks.
+3. AUTONOMOUS AI AGENTS & SOFTWARE CLONES: AI agents creating complete games/apps from 1 prompt, autonomous web shopping & booking bots, AI agents running companies while founders sleep.
+4. EVERYDAY AI SUPERPOWERS & HACKS: Instant voice cloning in 5 seconds, AI removing any watermark/object seamlessly, mind-blowing free open-source AI tools that save 10 hours of work.
+5. SHOCKING FUTURE TECH & BIO-AI: Neuralink paralyzed patients gaming telepathically, living biological brain cells on microchips running AI, autonomous drone swarms navigating without GPS.
+
+STRICT ANTI-REPETITION RULE:
+- Absolutely DO NOT generate generic "AI sees the world", "computer vision bounding boxes", or "AI tracks objects" themes! That topic has already been exhausted on this channel.
+- Pick a fresh, high-voltage topic from one of the 5 categories above that makes an Indian/global viewer stop scrolling instantly.
+`;
+
+    if (isCustom) {
+      return `The creator specifically requested a YouTube Short about: "${customTopic.trim()}". Create an irresistible, viral angle on this topic.`;
+    }
+    return `Pick today's most viral, high-CTR trending AI or Robotics concept from the categories below:${deduplicationInstruction}${trendingCategoriesPrompt}`;
+  }
+
+  // Ultra Short (20s): Generates 2 sequential 10-second scenes with an ultra-strong 2-second hook
+  async handleUltraShortPrompt(chatId, customTopic = null) {
+    const isCustom = Boolean(customTopic && customTopic.trim().length > 2);
+    const topicHeading = isCustom ? `Custom Topic: "${customTopic.trim()}"` : 'Viral Trending AI (20s Ultra Short)';
+
+    this.activeJob = {
+      type: 'ultra_short_prompt',
+      title: `⚡ Ultra Short: ${topicHeading}`,
+      startedAt: Date.now(),
+      currentStep: `Crafting 20s high-retention Short (2x10s scenes) with Gemini AI`,
+      stepNumber: 1,
+      totalSteps: 2,
+      logs: []
+    };
+    this.logEvent(`Ultra short prompt requested: ${topicHeading}`);
+
+    const statusMsg = await this.sendMessage(chatId, `⚡ *Researching ${topicHeading} & crafting 2-scene (20s) ultra-retention prompts...*`);
+
+    try {
+      let promptData;
+      try {
+        const topicResearchDirective = this.getDiverseTrendingAITopicPrompt(isCustom, customTopic, true);
+
+        this.logEvent('Calling Gemini AI for 2x10s ultra-hook scene structuring, 9:16 vertical framing, and Hinglish dialogue...');
+        const rawResponse = await this.generateAIContent(`You are an elite YouTube Shorts growth hacker for "Sameer | AgenticFlowAI".
+${topicResearchDirective}
+Target audience: Hindi / English (Hinglish) speaking tech enthusiasts and curious viewers on mobile.
+
+CRITICAL OBJECTIVE: 
+Shorts duration MUST BE EXACTLY 20 SECONDS (2 sequential 10-second scenes).
+Why? 20s Shorts achieve 100%+ loop retention on YouTube, which is the #1 signal to trigger the viral algorithm!
+
+CRITICAL HOOK RULE (0 to 2 SECONDS):
+The first 2 seconds of Scene 1 MUST have an explosive, scroll-stopping pattern interrupt!
+- Visual: Fast camera zoom-in, sudden dramatic action, or unbelievable high-tech visual.
+- Spoken Hook (Hinglish): An opening line that creates curiosity gap instantly (e.g. "Ruko! Yeh AI video dekh kar aap hairan reh jaoge...", "Sirf 5 second me yeh robot jo karta hai use dekh kar scientists bhi dang hain...", "Google aur OpenAI ke beech chupke se yeh kya ho gaya?").
+
+CRITICAL CONSTRAINTS (MANDATORY):
+1. ASPECT RATIO (9:16 VERTICAL): Every video prompt MUST begin with:
+   "Vertical 9:16 aspect ratio (YouTube Shorts vertical format, 1080x1920)."
+2. EXACTLY 2 CLIPS (10s EACH): Google Gemini VideoFX generates exactly 10s per generation. Structure into exactly 2 sequential 10-second scenes (Total: 20 seconds master Short).
+
+Output format MUST be strictly JSON with keys:
+{
+  "topic": "Catchy viral topic name",
+  "conceptHook": "Irresistible 2-second hook explanation (why no one will swipe away)",
+  "clip1": {
+    "title": "Scene 1: The 2-Second Shock Hook (10s)",
+    "videoPrompt": "Vertical 9:16 aspect ratio (YouTube Shorts vertical format, 1080x1920). Hyper-cinematic photorealistic 3D visual description in English framed vertically for mobile with high dynamic motion in first 2 seconds. End with [Dialogue in Hinglish]: '... exact high-energy spoken words in Hinglish...'"
+  },
+  "clip2": {
+    "title": "Scene 2: Mind-Blowing Proof & Loop CTA (10s)",
+    "videoPrompt": "Vertical 9:16 aspect ratio (YouTube Shorts vertical format, 1080x1920). Hyper-cinematic climax visual showing the breakthrough in action framed vertically for mobile. End with [Dialogue in Hinglish]: '... exact spoken words in Hinglish ending with a fast loop or subscribe to Sameer | AgenticFlowAI CTA...'"
+  }
+}
+Return ONLY valid raw JSON without markdown backticks.`);
+
+        let rawText = rawResponse.trim();
+        rawText = rawText.replace(/```json/gi, '').replace(/```/g, '').trim();
+        promptData = JSON.parse(rawText);
+
+        for (const key of ['clip1', 'clip2']) {
+          if (promptData[key] && promptData[key].videoPrompt) {
+            if (!promptData[key].videoPrompt.toLowerCase().includes('9:16')) {
+              promptData[key].videoPrompt = `Vertical 9:16 aspect ratio (YouTube Shorts vertical format, 1080x1920). ${promptData[key].videoPrompt}`;
+            }
+          }
+        }
+
+        await this.saveTopicToHistory(promptData.topic, promptData.conceptHook);
+        this.logEvent(`Ultra Short prompt generated successfully for "${promptData.topic}" (20s - 9:16 Vertical)`, 'success');
+      } catch (aiErr) {
+        this.logEvent(`AI Ultra Short prompt generation failed, using curated topic template: ${aiErr.message}`, 'warn');
+        promptData = null;
+      }
+
+      if (!promptData) {
+        promptData = {
+          topic: isCustom ? customTopic.trim() : 'Tesla Optimus Gen 3 Humanoid Robot Shock Test',
+          conceptHook: '2-Second Pattern Interrupt: Robot caught doing human tasks with zero delay',
+          clip1: {
+            title: 'Scene 1: The 2-Second Shock Hook (10s)',
+            videoPrompt: 'Vertical 9:16 aspect ratio (YouTube Shorts vertical format, 1080x1920). Dramatic macro crash-zoom into glowing metallic optical eyes of a sleek humanoid robot in a futuristic neon laboratory, vertical mobile framing. The robot fluidly catches a falling glass egg with millimeter precision. Hyper-realistic reflections, 60fps cinematic motion blur. [Dialogue in Hinglish]: "Ruko! Agar aapko lagta hai ki humanoid robots abhi slow hain, toh Elon Musk ke is naye video ko dekhiye!"'
+          },
+          clip2: {
+            title: 'Scene 2: Mind-Blowing Proof & Loop CTA (10s)',
+            videoPrompt: 'Vertical 9:16 aspect ratio (YouTube Shorts vertical format, 1080x1920). Full-body vertical shot of the humanoid robot sprint-jogging on an obstacle course and organizing complex microchips 5x faster than humans. High-tech cyberpunk atmosphere. [Dialogue in Hinglish]: "Yeh robot bina kisi insaani control ke poora kaam khud kar raha hai! Kya yeh 2026 me insaano ki jobs replace kar dega? Comment me batayein aur subscribe karein Sameer | AgenticFlowAI!"'
+          }
+        };
+      }
+
+      const responseCard = `⚡ *ULTRA SHORT CONCEPT (20s HIGH RETENTION)*
+🎯 *Topic:* ${promptData.topic}
+📱 *Format:* 9:16 Vertical Short (1080x1920)
+⏱ *Duration:* 20 Seconds (2 Scenes × 10s Gemini VideoFX)
+🔥 *2-Sec Hook:* ${promptData.conceptHook}
+
+💡 *Kyu ye chalega:* 20s ki duration se YouTube par *100%+ Loop Retention* aati hai aur algorithm foran Shorts feed me push karta hai!
+
+━━━━━━━━━━━━━━━━━━━━
+🎬 *${promptData.clip1.title}*
+👉 *Gemini VideoFX me ye prompt paste kijiye (9:16):*
+\`\`\`
+${promptData.clip1.videoPrompt}
+\`\`\`
+
+━━━━━━━━━━━━━━━━━━━━
+🎬 *${promptData.clip2.title}*
+👉 *Gemini VideoFX me ye prompt paste kijiye (9:16):*
+\`\`\`
+${promptData.clip2.videoPrompt}
+\`\`\`
+
+━━━━━━━━━━━━━━━━━━━━
+📲 *Ultra-Simple Instructions:*
+1. Google Gemini VideoFX me *9:16 (Vertical Short)* select karein.
+2. Bas **2 clips (10-10s)** generate karke download karein.
+3. Dono clips ko is chat me send kar dijiye.
+4. Tap karein: *[ ✅ Completed - Merge & Upload ]*!
+5. Bot ise merge karke **1-hour schedule buffer** ke sath direct YouTube par schedule kar dega.`;
+
+      await this.editMessage(chatId, statusMsg.message_id, responseCard);
+    } catch (err) {
+      this.logEvent(`Ultra short prompt generation error: ${err.message}`, 'error');
+      await this.editMessage(chatId, statusMsg.message_id, `❌ *Ultra Short prompt generation me error:* ${err.message}`);
+    } finally {
+      this.activeJob = null;
+    }
+  }
+
   // Give Me Prompt: Generates high-retention 10-second Gemini VideoFX prompts
   async handleGiveMePrompt(chatId, customTopic = null) {
     const isCustom = Boolean(customTopic && customTopic.trim().length > 2);
     const topicHeading = isCustom ? `Custom Topic: "${customTopic.trim()}"` : 'Trending AI Breakthroughs';
-    
+
     this.activeJob = {
       type: 'prompt_generation',
       title: `AI Prompt Research: ${topicHeading}`,
@@ -885,18 +1107,11 @@ ${instructionsFooter}`;
     try {
       let promptData;
       try {
-        const coveredTopicsList = this.topicHistory.slice(-50).map(t => `- "${t.topic}"`).join('\n');
-        const deduplicationInstruction = coveredTopicsList && !isCustom
-          ? `\n\nCRITICAL DEDUPLICATION (PREVIOUSLY COVERED TOPICS - NEVER REPEAT):\n${coveredTopicsList}\nYou MUST pick a completely FRESH, UNIQUE breakthrough concept that is completely different from all the past topics above.\n`
-          : '';
-
-        const userPromptInstruction = isCustom
-          ? `The user wants a Short specifically about: "${customTopic.trim()}". Research this topic thoroughly and create its continuation or breakdown.`
-          : `Research today's most viral, captivating trending AI, robotics, computer vision, neuro-tech or quantum breakthrough concept.${deduplicationInstruction}`;
+        const topicResearchDirective = this.getDiverseTrendingAITopicPrompt(isCustom, customTopic, false);
 
         this.logEvent('Calling Gemini AI for 4x10s scene structuring, 9:16 vertical framing, and Hinglish dialogue...');
         const rawResponse = await this.generateAIContent(`You are an elite YouTube Shorts strategist for the channel "Sameer | AgenticFlowAI".
-${userPromptInstruction}
+${topicResearchDirective}
 Target audience: Hindi / English (Hinglish) speaking audience curious about mind-blowing technology.
 
 CRITICAL CONSTRAINTS (MANDATORY):
@@ -1141,8 +1356,8 @@ ${promptData.clip4.videoPrompt}
 
       const isManual = Boolean(this.manualContext?.active && this.manualContext?.topic);
       const userTopic = isManual ? this.manualContext.topic.trim() : null;
-      const isShort = (this.manualContext?.format === 'short') || 
-                      (this.manualContext?.format !== 'long' && (totalDuration <= 60 || this.stagedClips.some(c => c.height > c.width)));
+      const isShort = (this.manualContext?.format === 'short') ||
+        (this.manualContext?.format !== 'long' && (totalDuration <= 60 || this.stagedClips.some(c => c.height > c.width)));
 
       let metadataPrompt = '';
       if (isManual) {
@@ -1198,7 +1413,7 @@ Return ONLY valid JSON without markdown formatting.`;
 
       let metadata = {
         title: userTopic ? `${userTopic.slice(0, 50)} | AgenticFlowAI ${isShort ? '#Shorts' : ''}` : `How AI Sees The World in Real Time | Mind-Blowing AI Vision #Shorts`,
-        description: userTopic 
+        description: userTopic
           ? `Discover ${userTopic} in this exciting video!\n\n🔔 Subscribe to Sameer | AgenticFlowAI for daily breakthroughs!\n#AI #Technology ${isShort ? '#Shorts ' : ''}#AgenticFlowAI`
           : `Ever wondered how Artificial Intelligence processes visual imagery? In this high-tech short, we break down neural networks and computer vision in Hinglish!\n\n🔔 Subscribe to Sameer | AgenticFlowAI for the latest daily AI breakthroughs!\n#AI #ComputerVision #ArtificialIntelligence #TechShorts #AgenticFlowAI #NeuralNetworks`,
         tags: ['AI', 'Technology', isShort ? 'Shorts' : 'Tech Video', 'AgenticFlowAI', 'Artificial Intelligence']
@@ -1248,6 +1463,7 @@ Return ONLY valid JSON without markdown formatting.`;
         youtubeUrl: null,
         message: 'Saved locally. YouTube API OAuth authentication pending in setup.'
       };
+      let scheduledTimeIST = '';
 
       // Check if YouTube credentials are setup
       const tokensPath = path.join(__dirname, '..', 'config', 'tokens.json');
@@ -1265,11 +1481,20 @@ Return ONLY valid JSON without markdown formatting.`;
           const publisher = new PublishingSchedulingAgent(db, creds);
           await publisher.initialize();
 
+          const publishAtDate = new Date(Date.now() + 60 * 60 * 1000);
+          const scheduledPublishTime = publishAtDate.toISOString();
+          scheduledTimeIST = publishAtDate.toLocaleTimeString('en-IN', {
+            timeZone: 'Asia/Kolkata',
+            hour: '2-digit',
+            minute: '2-digit'
+          });
+
           const scheduleEntry = {
             id: `telegram_prod_${timestamp}`,
             productionId: `telegram_prod_${timestamp}`,
             title: metadata.title,
             status: 'scheduled',
+            publishTime: scheduledPublishTime,
             metadata: {
               seo: {
                 title: metadata.title,
@@ -1281,19 +1506,19 @@ Return ONLY valid JSON without markdown formatting.`;
               },
               video: { path: mergedOutputPath },
               thumbnail: { path: fs.existsSync(thumbPath) ? thumbPath : null },
-              privacyStatus: 'public', // Manual upload and merged clips are always uploaded directly as Public
+              privacyStatus: 'private', // Scheduled release requires private initially
               containsSyntheticMedia: true
             }
           };
 
-          this.logEvent('Calling YouTube Data API v3 upload service...');
+          this.logEvent(`Calling YouTube Data API v3 upload service (Scheduled for ${scheduledTimeIST} IST)...`);
           const res = await publisher.uploadToYouTube(scheduleEntry);
           const videoId = res?.id || res?.data?.id || scheduleEntry.youtubeId;
           if (videoId) {
             uploadOutcome.published = true;
             uploadOutcome.youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
-            uploadOutcome.message = `Uploaded to YouTube: ${uploadOutcome.youtubeUrl}`;
-            this.logEvent(`YouTube upload successful: ${uploadOutcome.youtubeUrl}`, 'success');
+            uploadOutcome.message = `Uploaded to YouTube (Scheduled for ${scheduledTimeIST} IST): ${uploadOutcome.youtubeUrl}`;
+            this.logEvent(`YouTube upload successful (Scheduled 1-hour buffer): ${uploadOutcome.youtubeUrl}`, 'success');
           } else {
             uploadOutcome.message = 'Upload completed but no videoId was returned.';
             this.logEvent(uploadOutcome.message, 'warn');
@@ -1324,7 +1549,7 @@ Return ONLY valid JSON without markdown formatting.`;
       // Final Success Notification
       let uploadStatusText = '';
       if (uploadOutcome.published) {
-        uploadStatusText = `🚀 *YouTube Upload Successful!*\n🔗 *Video URL:* ${uploadOutcome.youtubeUrl}\n🌍 *Visibility:* Public (Direct Live)`;
+        uploadStatusText = `🚀 *YouTube Upload Successful!*\n🔗 *Video URL:* ${uploadOutcome.youtubeUrl}\n⏳ *Schedule:* 1-Hour Buffer (Auto-Public at ${scheduledTimeIST} IST)\n🔒 *Visibility:* Private (Scheduled Release)\n_💡 YouTube ko 1080p HD transcode aur algorithm recommendation categorize karne ke liye 1 ghante ka buffer mil gaya hai!_`;
       } else {
         uploadStatusText = `⚠️ *Video Processed Locally (Upload Issue):*\n${uploadOutcome.message}\n_File disk par safe hai._`;
       }
