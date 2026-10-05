@@ -149,6 +149,7 @@ class TelegramBotService {
     }
 
     this.setupFallbackCron();
+    this.setupDaily8AMAutomationCron();
     return true;
   }
 
@@ -427,7 +428,7 @@ class TelegramBotService {
         [{ text: '🎯 Strategy & Backlog' }, { text: '📈 Growth & Analytics' }],
         [{ text: '🩺 7 Agents Health' }, { text: '🤖 Operator Analysis' }],
         [{ text: '📋 Live Logs' }, { text: '🗑 Clear Current Draft' }],
-        [{ text: '🤖 Fallback AI Video Now' }]
+        [{ text: '🚀 8 AM Daily Auto Now' }, { text: '🤖 Fallback AI Video Now' }]
       ],
       resize_keyboard: true,
       persistent: true
@@ -641,6 +642,19 @@ ${statusLine}`;
       return;
     }
 
+    if (text === '🚀 8 AM Daily Auto Now' || text === '/auto_daily' || text === '/daily') {
+      if (this.activeJob) {
+        const elapsed = Math.round((Date.now() - this.activeJob.startedAt) / 1000);
+        await this.sendMessage(chatId, `⚠️ *Task Already Running!*\n\nAbhi background me ek task chal raha hai:\n📌 *Task:* ${this.activeJob.title}\n⏱ *Running Time:* ${elapsed}s\n📍 *Current Step:* ${this.activeJob.currentStep || this.currentActivity}\n\nLive status ke liye tap karein: [ 📊 System Status ]`);
+        return;
+      }
+      const { runDaily8AMPipeline } = require('../services/daily-gemini-pipeline');
+      runDaily8AMPipeline(this).catch(err => {
+        this.logger.error('Manual trigger 8 AM daily pipeline error:', err);
+      });
+      return;
+    }
+
     if (text === '🗑 Clear Current Draft' || text === '/clear') {
       if (this.activeJob && (this.activeJob.type === 'merge_and_upload' || this.activeJob.type === 'fallback')) {
         await this.sendMessage(chatId, `⚠️ *Draft Cannot Be Cleared Right Now*: Video process chal raha hai (${this.activeJob.title}). Pura hone ka intezaar karein.`);
@@ -797,6 +811,9 @@ Aapka private YouTube AI Automation System ready hai.
 8. 🤖 *Operator Analysis* — Autonomous operator execution pipeline status (View Only).
 9. 🩺 *7 Agents Health* — Sabhi 7 AI agents ka 24x7 operational health status (View Only).
 10. 📊 *System Status* & 📋 *Live Logs* — Real-time execution monitor.
+11. 🚀 *8 AM Daily Auto Now* — Gemini (Account 1 & 2) se 40s video auto-generate, staging, merge & ~9:15 AM IST YouTube schedule.
+
+⏰ *Daily Autonomous Schedule:* Har subah 8:00 AM IST par automatically 40s Short generate hokar YouTube par 9:00 - 9:30 AM IST release ke liye schedule ho jayega!
 
 Niche diye gaye interactive keyboard se shuru karein:`;
 
@@ -1347,6 +1364,17 @@ ${promptData.clip4.videoPrompt}
       const mergedSizeMB = Math.round((mergedStat.size / 1024 / 1024) * 10) / 10;
       this.logEvent(`Merged video file created: ${mergedSizeMB} MB at ${mergedOutputPath}`, 'success');
 
+      // Auto-delete raw input clips immediately after merge is completed
+      this.logEvent('Auto-deleting raw input clips from staging now that merged video is created...');
+      for (const clip of this.stagedClips) {
+        if (clip.localPath && fs.existsSync(clip.localPath) && path.resolve(clip.localPath) !== path.resolve(mergedOutputPath)) {
+          try {
+            await fsp.unlink(clip.localPath);
+            this.logEvent(`Deleted raw clip from staging: ${path.basename(clip.localPath)}`);
+          } catch (_delErr) {}
+        }
+      }
+
       // 2. Generate SEO Metadata & Thumbnail
       this.state = 'generating_metadata';
       this.activeJob.stepNumber = 2;
@@ -1540,8 +1568,19 @@ Return ONLY valid JSON without markdown formatting.`;
       await this.clearDraft();
       this.logEvent('Draft cleared and temporary staging directory cleaned up', 'success');
 
-      // Auto-cleanup samples folder immediately after successful YouTube upload
+      // Auto-cleanup completed video & samples folder immediately after YouTube upload
       if (uploadOutcome.published) {
+        if (fs.existsSync(mergedOutputPath)) {
+          try {
+            await fsp.unlink(mergedOutputPath);
+            this.logEvent(`Deleted completed video file after YouTube upload: ${path.basename(mergedOutputPath)}`, 'success');
+          } catch (_e) {}
+        }
+        if (thumbPath && fs.existsSync(thumbPath)) {
+          try {
+            await fsp.unlink(thumbPath);
+          } catch (_e) {}
+        }
         const { deletedCount: sampleFiles, freedMB: sampleMB } = await this.clearSamplesDir();
         this.logEvent(`Auto-cleanup completed: ${sampleFiles} sample files deleted from samples folder (~${sampleMB} MB freed)`, 'success');
       }
@@ -1581,7 +1620,7 @@ ${uploadStatusText}
 
   // Manual trigger for autonomous fallback video
   async handleManualFallbackTrigger(chatId) {
-    const confirmMsg = await this.sendMessage(chatId, '🤖 *Fallback Triggered*: Autonomous AI video pipeline start ho raha hai (Images + Voiceover + Subtitles)...\n🔒 *Note:* Yeh fallback video YouTube par *Private* upload hogi taaki aap pehle review kar sakein.');
+    const confirmMsg = await this.sendMessage(chatId, '🤖 *Fallback Triggered*: Dynamic AI SEO research & video pipeline start ho raha hai...\n🔍 Trending SEO Topic Research ➔ 🎙 Gemini Hinglish Voiceover ➔ 🎨 Dynamic Subtitles ➔ 🚀 YouTube Upload\n🔒 *Note:* Yeh video YouTube par *Private* upload hogi taaki aap pehle review kar sakein.');
     await this.runAutonomousFallback(chatId, confirmMsg.message_id);
   }
 
@@ -1614,6 +1653,28 @@ ${uploadStatusText}
     });
   }
 
+  // 8:00 AM IST Daily Automated Gemini Video Generation & Publishing Cron
+  setupDaily8AMAutomationCron() {
+    // Schedule: 0 8 * * * (At 8:00 AM every day in Asia/Kolkata timezone)
+    const dailyCronExpr = process.env.DAILY_GEMINI_8AM_CRON || '0 8 * * *';
+    this.logger.info(`Setting up Daily 8:00 AM IST Gemini Automation cron (${this.timezone}): ${dailyCronExpr}`);
+
+    this.daily8AMTask = cron.schedule(dailyCronExpr, async () => {
+      this.logger.info('⏰ 8:00 AM IST Daily Automated Gemini Video Pipeline triggered!');
+      try {
+        const { runDaily8AMPipeline } = require('../services/daily-gemini-pipeline');
+        await runDaily8AMPipeline(this);
+      } catch (err) {
+        this.logger.error('Error executing 8:00 AM daily automated pipeline:', err);
+        if (this.adminChatId) {
+          await this.sendMessage(this.adminChatId, `❌ *Daily 8:00 AM Pipeline Error:* ${err.message}`).catch(() => {});
+        }
+      }
+    }, {
+      timezone: this.timezone
+    });
+  }
+
   // Run autonomous fallback video pipeline
   async runAutonomousFallback(chatId, messageId) {
     if (this.state !== 'resting' && this.state !== 'receiving_clips') {
@@ -1626,7 +1687,7 @@ ${uploadStatusText}
       type: 'fallback',
       title: 'Autonomous AI Video Generation & Publish',
       startedAt: Date.now(),
-      currentStep: 'Rendering AI visual short with voiceover and dynamic subtitles',
+      currentStep: 'Researching trending AI SEO topic & crafting high-retention script',
       stepNumber: 1,
       totalSteps: 3,
       logs: []
@@ -1634,33 +1695,130 @@ ${uploadStatusText}
     this.logEvent('Autonomous fallback video generation pipeline started');
 
     this.state = 'fallback_generating';
-    this.currentActivity = 'Rendering autonomous fallback video';
+    this.currentActivity = 'Researching trending AI SEO topic';
 
     try {
       if (chatId && messageId) {
-        await this.editMessage(chatId, messageId, '🤖 *Autonomous Fallback (1/3)*: Rendering AI visual short with voiceover and dynamic subtitles...');
+        await this.editMessage(chatId, messageId, '🤖 *Autonomous Fallback (1/3)*:\n🔍 Trending AI concepts & YouTube SEO research chal raha hai...');
       }
 
-      // Execute realistic short generator
+      // Step 1: Research dynamic SEO concept and generate script
+      let seoData = null;
+      try {
+        const topicDirective = this.getDiverseTrendingAITopicPrompt(false, null, false);
+        const prompt = `You are an elite YouTube Shorts SEO strategist and scriptwriter for the channel "Sameer | AgenticFlowAI".
+Channel Niche: Cutting-edge AI, Humanoid Robotics, Autonomous Agents, and Shocking Tech Concepts explained in energetic Hinglish.
+Target Audience: Mobile viewers looking for mind-blowing, high-retention tech shorts.
+
+${topicDirective}
+
+CRITICAL RULES:
+1. Select today's most viral, high-CTR, trending AI or Robotics concept.
+2. NEVER generate generic "AI sees images" or "computer vision bounding boxes".
+3. Script duration: EXACTLY 22-28 seconds total spoken speech (4 scenes).
+4. Language: Conversational, energetic Hinglish.
+5. Provide 4 distinct scenes:
+   - text: Spoken line in Hinglish (fast-paced, high retention, no fluff).
+   - subtitle: Punchy, capitalized on-screen caption (under 6 words with emojis).
+   - query: Stock video search keyword (must be one of: robot, futuristic, technology, computer, cyber, network, coding, space, data).
+6. First 2 seconds of Scene 1 MUST have an explosive curiosity hook!
+
+Return ONLY valid JSON without markdown formatting:
+{
+  "topic": "Specific viral topic name",
+  "seoTitle": "Curiosity High-CTR Title under 65 chars with #Shorts",
+  "seoDescription": "Comprehensive 3-paragraph YouTube description with SEO keywords, bullet points, CTA to subscribe to Sameer | AgenticFlowAI, and hashtags",
+  "tags": ["AI", "Tech Shorts", "Artificial Intelligence", "Robotics", "Future Tech", "Sameer AgenticFlowAI", "Shorts"],
+  "hook": "First 2-second opening spoken line",
+  "scenes": [
+    { "text": "...", "subtitle": "...", "query": "robot" },
+    { "text": "...", "subtitle": "...", "query": "technology" },
+    { "text": "...", "subtitle": "...", "query": "futuristic" },
+    { "text": "...", "subtitle": "...", "query": "cyber" }
+  ]
+}`;
+        this.logEvent('Calling AI for dynamic SEO topic and script research...');
+        const rawRes = await this.generateAIContent(prompt);
+        const cleaned = rawRes.replace(/```json/gi, '').replace(/```/g, '').trim();
+        seoData = JSON.parse(cleaned);
+        if (!seoData.seoTitle || !Array.isArray(seoData.scenes) || seoData.scenes.length < 3) {
+          throw new Error('Incomplete SEO payload from AI');
+        }
+        this.logEvent(`Dynamic SEO Topic selected: "${seoData.topic}" | Title: "${seoData.seoTitle}"`, 'success');
+      } catch (seoErr) {
+        this.logEvent(`AI SEO research note: ${seoErr.message}; script generator will select curated non-repeated topic`, 'warn');
+      }
+
+      // Save payload if researched
+      const timestamp = Date.now();
+      const payloadFile = path.join(__dirname, '..', 'temp', `fallback_payload_${timestamp}.json`);
+      if (seoData) {
+        await fsp.mkdir(path.dirname(payloadFile), { recursive: true });
+        await fsp.writeFile(payloadFile, JSON.stringify(seoData, null, 2), 'utf8');
+      }
+
+      // Step 2: Render video
+      this.activeJob.stepNumber = 2;
+      this.activeJob.currentStep = `Rendering AI visual short: ${seoData?.topic || 'Trending AI Concept'}`;
+      this.currentActivity = `Rendering: ${seoData?.topic || 'AI Short'}`;
+
+      if (chatId && messageId) {
+        const topicName = seoData?.topic ? `\n📌 *Topic:* ${seoData.topic}` : '';
+        const titleName = seoData?.seoTitle ? `\n🎬 *Title:* ${seoData.seoTitle}` : '';
+        await this.editMessage(chatId, messageId, `🤖 *Autonomous Fallback (2/3)*:${topicName}${titleName}\n🎙 Gemini Voiceover + 🎨 Dynamic Subtitles + 📽 9:16 Video Render chal raha hai...`);
+      }
+
+      // Execute realistic short generator child process
       const realisticScript = path.join(__dirname, '..', 'scripts', 'generate-realistic-short.js');
       const { exec } = require('child_process');
       const util = require('util');
       const execPromise = util.promisify(exec);
 
-      this.logEvent('Running generate-realistic-short.js child process...');
-      await execPromise(`node "${realisticScript}"`, {
+      const cmd = seoData
+        ? `node "${realisticScript}" --payload "${payloadFile}"`
+        : `node "${realisticScript}"`;
+
+      this.logEvent(`Running generate-realistic-short.js: ${cmd}`);
+      const { stdout } = await execPromise(cmd, {
         cwd: path.join(__dirname, '..'),
-        timeout: 180000
+        timeout: 240000
       });
+
+      // Parse generated metadata from child process
+      let generatedMeta = seoData;
+      const metaMatch = stdout.match(/METADATA_JSON:\s*(\{.*\})/);
+      if (metaMatch) {
+        try {
+          generatedMeta = JSON.parse(metaMatch[1]);
+        } catch (_ignore) {}
+      }
+      if (!generatedMeta) {
+        const metaPath = path.join(__dirname, '..', 'temp', 'realistic_short', 'metadata.json');
+        if (fs.existsSync(metaPath)) {
+          try {
+            generatedMeta = JSON.parse(await fsp.readFile(metaPath, 'utf8'));
+          } catch (_e) {}
+        }
+      }
+
+      const finalTitle = generatedMeta?.seoTitle || generatedMeta?.title || 'Mind-Blowing AI Breakthrough You Never Saw Coming! 🤖 #Shorts';
+      const finalDesc = generatedMeta?.seoDescription || generatedMeta?.description || 'Discover cutting-edge AI breakthroughs with Sameer | AgenticFlowAI #AI #Shorts';
+      const finalTags = generatedMeta?.tags || ['AI', 'Technology', 'Shorts', 'AgenticFlowAI', 'Robotics'];
+      const finalTopic = generatedMeta?.topic || 'Trending AI';
+      const finalHook = generatedMeta?.hook || '';
 
       const fallbackSample = path.join(__dirname, '..', 'samples', 'agenticflow_ai_vision_sample_short.mp4');
       this.logEvent(`Fallback video rendered: ${fallbackSample}`, 'success');
 
+      // Step 3: Upload fallback video to YouTube with dynamic SEO metadata
+      this.activeJob.stepNumber = 3;
+      this.activeJob.currentStep = 'Uploading to YouTube Channel (Private)';
+      this.currentActivity = 'Uploading video to YouTube';
+
       if (chatId && messageId) {
-        await this.editMessage(chatId, messageId, `🤖 *Autonomous Fallback (2/3)*: Video rendered successfully! Preparing YouTube metadata and upload...`);
+        await this.editMessage(chatId, messageId, `🤖 *Autonomous Fallback (3/3)*:\n🚀 Video render complete!\nUploading *"${finalTitle}"* to YouTube Channel (Private)...`);
       }
 
-      // Upload fallback video to YouTube
       let uploadOutcome = {
         published: false,
         youtubeUrl: null,
@@ -1682,18 +1840,16 @@ ${uploadStatusText}
           const publisher = new PublishingSchedulingAgent(db, creds);
           await publisher.initialize();
 
-          const timestamp = Date.now();
-          const fallbackTitle = `Mind-Blowing AI Breakthrough You Never Saw Coming! 🤖 #Shorts`;
           const scheduleEntry = {
             id: `telegram_fallback_${timestamp}`,
             productionId: `telegram_fallback_${timestamp}`,
-            title: fallbackTitle,
+            title: finalTitle,
             status: 'scheduled',
             metadata: {
               seo: {
-                title: fallbackTitle,
-                description: `Discover how Autonomous AI systems and Computer Vision are reshaping reality in 2026!\n\n🔔 Subscribe to Sameer | AgenticFlowAI for daily mind-blowing tech shorts!\n#AI #Technology #Shorts #AgenticFlowAI #Robotics`,
-                tags: ['AI', 'Technology', 'Shorts', 'AgenticFlowAI', 'Robotics', 'Artificial Intelligence'],
+                title: finalTitle,
+                description: finalDesc,
+                tags: finalTags,
                 categoryId: '28',
                 defaultLanguage: 'en',
                 defaultAudioLanguage: 'hi'
@@ -1704,7 +1860,7 @@ ${uploadStatusText}
             }
           };
 
-          this.logEvent('Uploading autonomous fallback video to YouTube Channel (Private)...');
+          this.logEvent(`Uploading autonomous fallback video with SEO title "${finalTitle}"...`);
           const res = await publisher.uploadToYouTube(scheduleEntry);
           const videoId = res?.id || res?.data?.id || scheduleEntry.youtubeId;
           if (videoId) {
@@ -1718,20 +1874,31 @@ ${uploadStatusText}
         }
       }
 
+      // Save topic to permanent history memory so it NEVER repeats
+      await this.saveTopicToHistory(finalTitle, finalHook || finalTopic);
+
       const todayStr = new Date().toISOString().split('T')[0];
       this.lastPublishedDate = todayStr;
       await this.saveAdminInfo();
 
-      // Auto-cleanup samples folder after fallback upload
+      // Clean up temp payload file
+      try {
+        if (fs.existsSync(payloadFile)) await fsp.unlink(payloadFile);
+      } catch (_e) {}
+
+      // Auto-cleanup samples folder after fallback upload if published
       if (uploadOutcome.published) {
         await this.clearSamplesDir();
       }
 
+      const tagsPreview = finalTags.slice(0, 5).map(t => `#${t.replace(/\s+/g, '')}`).join(' ');
       const doneText = `✅ *AUTONOMOUS FALLBACK COMPLETE!*
 
-🎬 *Video:* AI Vision Concept Short
+🎬 *Topic:* ${finalTopic}
+📌 *Title:* ${finalTitle}
+🏷 *Tags:* ${tagsPreview}
 📁 *File:* \`${fallbackSample}\`
-⏱ *Duration:* ~30-35s
+⏱ *Duration:* ~25-30s
 ${uploadOutcome.published ? `🚀 *YouTube URL:* ${uploadOutcome.youtubeUrl}\n🔒 *Visibility:* Private (Aap YouTube Studio me check karke public kar sakte hain)` : `ℹ️ *Status:* Rendered locally (${uploadOutcome.message})`}
 📅 *Date:* ${todayStr}
 

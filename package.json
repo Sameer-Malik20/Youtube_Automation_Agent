@@ -20,6 +20,9 @@
     "credentials:setup": "node utils/credential-manager.js setup",
     "auth:youtube": "node scripts/auth-youtube.js",
     "telegram": "node scripts/run-telegram-bot.js",
+    "daily:8am": "node scripts/run-daily-8am-pipeline.js",
+    "profiles:setup": "node scripts/setup-gemini-profiles.js",
+    "profiles:check": "node scripts/check-gemini-profiles.js",
     "lint": "eslint ."
   },
   "dependencies": {

@@ -29,8 +29,8 @@ async function generateVideoOnGeminiWeb(promptText, outputFilename) {
 
   const page = context.pages()[0] || await context.newPage();
 
-  console.log('Navigating to Gemini Web App...');
-  await page.goto('https://gemini.google.com/app', { waitUntil: 'domcontentloaded' });
+  console.log('Navigating to Gemini Web Videos Studio...');
+  await page.goto('https://gemini.google.com/videos', { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3000);
 
   // Check login
@@ -39,6 +39,28 @@ async function generateVideoOnGeminiWeb(promptText, outputFilename) {
     console.error('❌ ERROR: User is not logged in! Please run `node scripts/login-gemini-browser.js` first.');
     await context.close();
     process.exit(1);
+  }
+
+  // Ensure Aspect Ratio is Portrait (9:16)
+  try {
+    const aspectBtn = await page.waitForSelector('button[aria-label*="Aspect ratio"], button:has-text("Landscape"), button:has-text("Portrait")', { timeout: 8000 }).catch(() => null);
+    if (aspectBtn) {
+      const aspectText = await page.evaluate(el => ((el.innerText || '') + ' ' + (el.getAttribute('aria-label') || '')).toLowerCase(), aspectBtn);
+      if (!aspectText.includes('portrait')) {
+        console.log('Switching Aspect Ratio to Portrait (9:16)...');
+        await aspectBtn.click().catch(() => {});
+        await page.waitForTimeout(1000);
+        await page.evaluate(() => {
+          const all = Array.from(document.querySelectorAll('*'));
+          const target = all.find(el => (el.getAttribute('aria-label') === 'Portrait (9:16)' || el.textContent?.trim() === 'Portrait (9:16)') && el.offsetParent !== null);
+          if (target) target.click();
+        });
+        await page.waitForTimeout(1000);
+        console.log('✅ Aspect ratio set to Portrait (9:16)');
+      }
+    }
+  } catch (err) {
+    console.warn('Aspect ratio selection notice:', err.message);
   }
 
   console.log('Locating chat input box...');

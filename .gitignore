@@ -12,15 +12,7 @@ data/telegram_admin.json
 node_modules/
 
 # Local database & staging data
-data/youtube_automation.db
-data/telegram_staging/
-data/*.db
-data/assets/
-data/audio/
-data/captions/
-data/scripts/
-data/telegram_admin.json
-data/topic_history.json
+data/
 
 # Media & Temporary render files
 samples/
